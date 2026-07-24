@@ -16,3 +16,5 @@ arduino.log
 .DS_Store
 Thumbs.db
 
+# credentials
+WiFiCredentials.h
