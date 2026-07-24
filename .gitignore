@@ -1,0 +1,18 @@
+# Arduino IDE 1.x / 2.x & Arduino CLI build folders
+build/
+build.*
+_build/
+.arduino/
+arduino.log
+
+# If you use VS Code + PlatformIO extension
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# Standard OS junk files
+.DS_Store
+Thumbs.db
+
