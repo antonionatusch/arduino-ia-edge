@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WebServer.h>
+#include <WebSocketsServer.h>
 #include <WiFi.h>
 #include "esp_camera.h"
 #include "esp_heap_caps.h"
@@ -32,10 +33,19 @@ constexpr int PCLK_GPIO_NUM = 22;
 constexpr uint16_t EXPECTED_SENSOR_PID = 0x2145;
 constexpr size_t EXPECTED_RGB565_BYTES = 160U * 120U * 2U;
 constexpr unsigned long WIFI_RETRY_MS = 15000;
+constexpr uint8_t DEFAULT_STREAM_FPS = 4;
+constexpr uint8_t MAX_STREAM_FPS = 8;
+constexpr uint8_t NO_STREAM_CLIENT = 0xFF;
 
 WebServer server(80);
+WebSocketsServer webSocket(81);
 uint16_t detectedSensorPid = 0;
 unsigned long lastWifiRetry = 0;
+unsigned long lastStreamFrame = 0;
+uint32_t streamedFrames = 0;
+uint8_t streamClient = NO_STREAM_CLIENT;
+uint8_t streamFps = DEFAULT_STREAM_FPS;
+bool streamActive = false;
 
 void printMemoryDiagnostics(const char *context) {
   Serial.printf("[%s] Heap libre: %u bytes, heap minimo: %u bytes, PSRAM libre: %u bytes\n",
@@ -51,6 +61,41 @@ void sendTextError(int statusCode, const String &message) {
   server.send(statusCode, "text/plain; charset=utf-8", message);
 }
 
+bool captureBmp(uint8_t **bmpBuffer, size_t *bmpLength, String &errorMessage) {
+  *bmpBuffer = nullptr;
+  *bmpLength = 0;
+
+  camera_fb_t *frame = esp_camera_fb_get();
+  if (frame == nullptr) {
+    errorMessage = "No se pudo obtener un framebuffer de la camara.";
+    return false;
+  }
+
+  if (frame->format != PIXFORMAT_RGB565 || frame->width != 160 ||
+      frame->height != 120 || frame->len != EXPECTED_RGB565_BYTES) {
+    errorMessage = "Framebuffer inesperado: " + String(frame->width) + "x" +
+                   String(frame->height) + ", formato=" + String(frame->format) +
+                   ", bytes=" + String(frame->len);
+    esp_camera_fb_return(frame);
+    return false;
+  }
+
+  const bool converted = frame2bmp(frame, bmpBuffer, bmpLength);
+  esp_camera_fb_return(frame);
+
+  if (!converted || *bmpBuffer == nullptr || *bmpLength == 0) {
+    if (*bmpBuffer != nullptr) {
+      free(*bmpBuffer);
+      *bmpBuffer = nullptr;
+    }
+    *bmpLength = 0;
+    errorMessage = "frame2bmp() no pudo convertir la captura RGB565.";
+    return false;
+  }
+
+  return true;
+}
+
 void handleStatus() {
   String json = "{";
   json += "\"camera_ready\":true,";
@@ -59,7 +104,10 @@ void handleStatus() {
   json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
   json += "\"free_psram\":" + String(ESP.getFreePsram()) + ",";
   json += "\"format\":\"RGB565\",";
-  json += "\"resolution\":\"160x120\"";
+  json += "\"resolution\":\"160x120\",";
+  json += "\"websocket_port\":81,";
+  json += "\"stream_fps\":" + String(streamFps) + ",";
+  json += "\"stream_active\":" + String(streamActive ? "true" : "false");
   json += "}";
 
   server.sendHeader("Cache-Control", "no-store");
@@ -69,41 +117,11 @@ void handleStatus() {
 void handleCapture() {
   printMemoryDiagnostics("antes de captura");
 
-  camera_fb_t *frame = esp_camera_fb_get();
-  if (frame == nullptr) {
-    sendTextError(503, "No se pudo obtener un framebuffer de la camara.");
-    return;
-  }
-
-  Serial.printf("Framebuffer: %ux%u, formato=%d, longitud=%u bytes\n",
-                frame->width,
-                frame->height,
-                frame->format,
-                frame->len);
-
-  if (frame->format != PIXFORMAT_RGB565 || frame->width != 160 ||
-      frame->height != 120 || frame->len != EXPECTED_RGB565_BYTES) {
-    String details = "Framebuffer inesperado: " + String(frame->width) + "x" +
-                     String(frame->height) + ", formato=" + String(frame->format) +
-                     ", bytes=" + String(frame->len);
-    esp_camera_fb_return(frame);
-    sendTextError(500, details);
-    return;
-  }
-
   uint8_t *bmpBuffer = nullptr;
   size_t bmpLength = 0;
-  const bool converted = frame2bmp(frame, &bmpBuffer, &bmpLength);
-
-  // The camera owns the framebuffer; return it immediately after conversion.
-  esp_camera_fb_return(frame);
-  frame = nullptr;
-
-  if (!converted || bmpBuffer == nullptr || bmpLength == 0) {
-    if (bmpBuffer != nullptr) {
-      free(bmpBuffer);
-    }
-    sendTextError(500, "frame2bmp() no pudo convertir la captura RGB565.");
+  String errorMessage;
+  if (!captureBmp(&bmpBuffer, &bmpLength, errorMessage)) {
+    sendTextError(503, errorMessage);
     return;
   }
 
@@ -118,6 +136,102 @@ void handleCapture() {
   free(bmpBuffer);
   bmpBuffer = nullptr;
   printMemoryDiagnostics("despues de respuesta");
+}
+
+void handleWebSocketEvent(uint8_t client, WStype_t type, uint8_t *payload, size_t length) {
+  if (type == WStype_CONNECTED) {
+    IPAddress remoteIp = webSocket.remoteIP(client);
+    Serial.printf("WebSocket cliente %u conectado desde %s\n",
+                  client,
+                  remoteIp.toString().c_str());
+    webSocket.sendTXT(client, "READY");
+    return;
+  }
+
+  if (type == WStype_DISCONNECTED) {
+    Serial.printf("WebSocket cliente %u desconectado.\n", client);
+    if (client == streamClient) {
+      streamActive = false;
+      streamClient = NO_STREAM_CLIENT;
+    }
+    return;
+  }
+
+  if (type != WStype_TEXT) {
+    return;
+  }
+
+  String command;
+  command.reserve(length);
+  for (size_t index = 0; index < length; ++index) {
+    command += static_cast<char>(payload[index]);
+  }
+  command.trim();
+  command.toUpperCase();
+  Serial.printf("WebSocket cliente %u: %s\n", client, command.c_str());
+
+  if (command == "START") {
+    if (streamClient != NO_STREAM_CLIENT && streamClient != client) {
+      webSocket.sendTXT(client, "ERROR:STREAM_BUSY");
+      return;
+    }
+    streamClient = client;
+    streamActive = true;
+    lastStreamFrame = 0;
+    webSocket.sendTXT(client, "STREAM_STARTED");
+  } else if (command == "PAUSE") {
+    if (client == streamClient) {
+      streamActive = false;
+      webSocket.sendTXT(client, "STREAM_PAUSED");
+    }
+  } else if (command == "STOP") {
+    if (client == streamClient) {
+      streamActive = false;
+      streamClient = NO_STREAM_CLIENT;
+      webSocket.sendTXT(client, "STREAM_STOPPED");
+    }
+  } else if (command.startsWith("FPS:")) {
+    const int requestedFps = command.substring(4).toInt();
+    if (requestedFps < 1 || requestedFps > MAX_STREAM_FPS) {
+      webSocket.sendTXT(client, "ERROR:FPS_RANGE_1_8");
+      return;
+    }
+    streamFps = static_cast<uint8_t>(requestedFps);
+    String response = "FPS:" + String(streamFps);
+    webSocket.sendTXT(client, response);
+  } else {
+    webSocket.sendTXT(client, "ERROR:UNKNOWN_COMMAND");
+  }
+}
+
+void sendStreamFrame() {
+  uint8_t *bmpBuffer = nullptr;
+  size_t bmpLength = 0;
+  String errorMessage;
+  if (!captureBmp(&bmpBuffer, &bmpLength, errorMessage)) {
+    Serial.println("Error de stream: " + errorMessage);
+    webSocket.sendTXT(streamClient, "ERROR:CAPTURE_FAILED");
+    return;
+  }
+
+  const bool sent = webSocket.sendBIN(streamClient, bmpBuffer, bmpLength);
+  free(bmpBuffer);
+  bmpBuffer = nullptr;
+
+  if (!sent) {
+    Serial.println("No se pudo enviar el frame WebSocket; stream pausado.");
+    streamActive = false;
+    return;
+  }
+
+  ++streamedFrames;
+  if (streamedFrames % 40 == 0) {
+    Serial.printf("Stream: %u frames, ultimo BMP=%u bytes, FPS objetivo=%u\n",
+                  streamedFrames,
+                  bmpLength,
+                  streamFps);
+    printMemoryDiagnostics("stream");
+  }
 }
 
 bool initializeCamera() {
@@ -217,14 +331,28 @@ void setup() {
   server.onNotFound([]() { sendTextError(404, "Endpoint no encontrado."); });
   server.begin();
   Serial.println("Servidor HTTP iniciado en el puerto 80.");
+
+  webSocket.begin();
+  webSocket.onEvent(handleWebSocketEvent);
+  Serial.printf("Servidor WebSocket iniciado en el puerto 81 a %u FPS.\n", streamFps);
 }
 
 void loop() {
   server.handleClient();
+  webSocket.loop();
+
+  const unsigned long streamInterval = 1000UL / streamFps;
+  if (streamActive && WiFi.status() == WL_CONNECTED &&
+      millis() - lastStreamFrame >= streamInterval) {
+    lastStreamFrame = millis();
+    sendStreamFrame();
+  }
 
   if (WiFi.status() != WL_CONNECTED && millis() - lastWifiRetry >= WIFI_RETRY_MS) {
     lastWifiRetry = millis();
     Serial.println("Wi-Fi desconectado; intentando reconectar...");
+    streamActive = false;
+    streamClient = NO_STREAM_CLIENT;
     WiFi.disconnect();
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   }
