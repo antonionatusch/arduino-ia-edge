@@ -127,21 +127,15 @@ bool initializeCamera() {
 
   config.xclk_freq_hz = 20000000;
 
-  /*
-   * Para diagnóstico usamos JPEG.
-   * Es más eficiente en memoria que RGB565 para capturas completas.
-   */
-  config.pixel_format = PIXFORMAT_JPEG;
+  config.pixel_format = PIXFORMAT_RGB565;
 
   if (psramFound()) {
     config.frame_size = FRAMESIZE_QVGA;  // 320 x 240
-    config.jpeg_quality = 12;
-    config.fb_count = 2;
-    config.grab_mode = CAMERA_GRAB_LATEST;
+    config.fb_count = 1;
+    config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     config.fb_location = CAMERA_FB_IN_PSRAM;
   } else {
     config.frame_size = FRAMESIZE_QQVGA; // 160 x 120
-    config.jpeg_quality = 15;
     config.fb_count = 1;
     config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
     config.fb_location = CAMERA_FB_IN_DRAM;
