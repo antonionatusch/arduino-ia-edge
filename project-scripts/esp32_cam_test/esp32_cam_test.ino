@@ -192,7 +192,7 @@ bool captureDiagnosticFrame() {
   Serial.println();
   Serial.println("[CAPTURA] Solicitando imagen...");
 
-  const unsigned long startMs = millis();
+  const unsigned long startUs = micros();
 
   camera_fb_t *frame = esp_camera_fb_get();
 
@@ -202,14 +202,18 @@ bool captureDiagnosticFrame() {
     return false;
   }
 
-  const unsigned long elapsedMs = millis() - startMs;
+  const unsigned long elapsedUs = micros() - startUs;
 
   Serial.println("[CAPTURA] Imagen obtenida.");
   Serial.printf("[CAPTURA] Ancho: %u px\n", frame->width);
   Serial.printf("[CAPTURA] Alto: %u px\n", frame->height);
   Serial.printf("[CAPTURA] Tamaño: %u bytes\n", frame->len);
   Serial.printf("[CAPTURA] Formato: %d\n", frame->format);
-  Serial.printf("[CAPTURA] Tiempo: %lu ms\n", elapsedMs);
+  Serial.printf(
+      "[CAPTURA] Tiempo: %lu us (%.2f ms)\n",
+      elapsedUs,
+      elapsedUs / 1000.0
+  );
   Serial.printf("[MEMORIA] Heap libre: %u bytes\n", ESP.getFreeHeap());
   Serial.printf("[MEMORIA] PSRAM libre: %u bytes\n", ESP.getFreePsram());
 
@@ -337,10 +341,10 @@ void loop() {
     wifiReady = true;
   }
 
-  if (millis() - lastCaptureMs >= CAPTURE_INTERVAL_MS) {
+  /* if (millis() - lastCaptureMs >= CAPTURE_INTERVAL_MS) {
     lastCaptureMs = millis();
     captureDiagnosticFrame();
-  }
+  } */
 
   delay(20);
 }
