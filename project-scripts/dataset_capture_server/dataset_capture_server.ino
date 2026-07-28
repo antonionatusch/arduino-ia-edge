@@ -31,10 +31,10 @@ constexpr int HREF_GPIO_NUM = 23;
 constexpr int PCLK_GPIO_NUM = 22;
 
 constexpr uint16_t EXPECTED_SENSOR_PID = 0x2145;
-constexpr size_t EXPECTED_RGB565_BYTES = 160U * 120U * 2U;
+constexpr size_t EXPECTED_RGB565_BYTES = 320U * 240U * 2U;
 constexpr unsigned long WIFI_RETRY_MS = 15000;
-constexpr uint8_t DEFAULT_STREAM_FPS = 4;
-constexpr uint8_t MAX_STREAM_FPS = 8;
+constexpr uint8_t DEFAULT_STREAM_FPS = 2;
+constexpr uint8_t MAX_STREAM_FPS = 4;
 constexpr uint8_t NO_STREAM_CLIENT = 0xFF;
 
 WebServer server(80);
@@ -71,8 +71,8 @@ bool captureBmp(uint8_t **bmpBuffer, size_t *bmpLength, String &errorMessage) {
     return false;
   }
 
-  if (frame->format != PIXFORMAT_RGB565 || frame->width != 160 ||
-      frame->height != 120 || frame->len != EXPECTED_RGB565_BYTES) {
+  if (frame->format != PIXFORMAT_RGB565 || frame->width != 320 ||
+      frame->height != 240 || frame->len != EXPECTED_RGB565_BYTES) {
     errorMessage = "Framebuffer inesperado: " + String(frame->width) + "x" +
                    String(frame->height) + ", formato=" + String(frame->format) +
                    ", bytes=" + String(frame->len);
@@ -104,7 +104,7 @@ void handleStatus() {
   json += "\"free_heap\":" + String(ESP.getFreeHeap()) + ",";
   json += "\"free_psram\":" + String(ESP.getFreePsram()) + ",";
   json += "\"format\":\"RGB565\",";
-  json += "\"resolution\":\"160x120\",";
+  json += "\"resolution\":\"320x240\",";
   json += "\"websocket_port\":81,";
   json += "\"stream_fps\":" + String(streamFps) + ",";
   json += "\"stream_active\":" + String(streamActive ? "true" : "false");
@@ -193,7 +193,7 @@ void handleWebSocketEvent(uint8_t client, WStype_t type, uint8_t *payload, size_
   } else if (command.startsWith("FPS:")) {
     const int requestedFps = command.substring(4).toInt();
     if (requestedFps < 1 || requestedFps > MAX_STREAM_FPS) {
-      webSocket.sendTXT(client, "ERROR:FPS_RANGE_1_8");
+      webSocket.sendTXT(client, "ERROR:FPS_RANGE_1_4");
       return;
     }
     streamFps = static_cast<uint8_t>(requestedFps);
@@ -205,30 +205,43 @@ void handleWebSocketEvent(uint8_t client, WStype_t type, uint8_t *payload, size_
 }
 
 void sendStreamFrame() {
-  uint8_t *bmpBuffer = nullptr;
-  size_t bmpLength = 0;
-  String errorMessage;
-  if (!captureBmp(&bmpBuffer, &bmpLength, errorMessage)) {
-    Serial.println("Error de stream: " + errorMessage);
+  camera_fb_t *frame = esp_camera_fb_get();
+
+  if (frame == nullptr) {
+    Serial.println("Error de stream: no se obtuvo framebuffer.");
     webSocket.sendTXT(streamClient, "ERROR:CAPTURE_FAILED");
     return;
   }
 
-  const bool sent = webSocket.sendBIN(streamClient, bmpBuffer, bmpLength);
-  free(bmpBuffer);
-  bmpBuffer = nullptr;
+  if (frame->format != PIXFORMAT_RGB565 || frame->width != 320 ||
+      frame->height != 240 || frame->len != EXPECTED_RGB565_BYTES) {
+    Serial.printf("Framebuffer inesperado: %ux%u, formato=%d, bytes=%u\n",
+                  frame->width,
+                  frame->height,
+                  frame->format,
+                  frame->len);
+
+    esp_camera_fb_return(frame);
+    webSocket.sendTXT(streamClient, "ERROR:INVALID_FRAME");
+    return;
+  }
+
+  const size_t frameLength = frame->len;
+  const bool sent = webSocket.sendBIN(streamClient, frame->buf, frameLength);
+
+  esp_camera_fb_return(frame);
 
   if (!sent) {
-    Serial.println("No se pudo enviar el frame WebSocket; stream pausado.");
+    Serial.println("No se pudo enviar el frame RGB565; stream pausado.");
     streamActive = false;
     return;
   }
 
   ++streamedFrames;
-  if (streamedFrames % 40 == 0) {
-    Serial.printf("Stream: %u frames, ultimo BMP=%u bytes, FPS objetivo=%u\n",
+  if (streamedFrames % 20 == 0) {
+    Serial.printf("Stream: %u frames, ultimo RGB565=%u bytes, FPS objetivo=%u\n",
                   streamedFrames,
-                  bmpLength,
+                  frameLength,
                   streamFps);
     printMemoryDiagnostics("stream");
   }
@@ -256,9 +269,9 @@ bool initializeCamera() {
   config.pin_reset = RESET_GPIO_NUM;
   config.xclk_freq_hz = 20000000;
   config.pixel_format = PIXFORMAT_RGB565;
-  config.frame_size = FRAMESIZE_QQVGA;
+  config.frame_size = FRAMESIZE_QVGA;
   config.fb_count = 1;
-  config.fb_location = CAMERA_FB_IN_DRAM;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
 
   const esp_err_t error = esp_camera_init(&config);
