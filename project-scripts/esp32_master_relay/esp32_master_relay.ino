@@ -24,8 +24,11 @@ constexpr int DAYLIGHT_OFFSET_SECONDS = 0;
 constexpr char NTP_SERVER_1[] = "pool.ntp.org";
 constexpr char NTP_SERVER_2[] = "time.nist.gov";
 
-constexpr int PREWAKE_SECOND_OF_HOUR = 59 * 60 + 30;
-constexpr int SHUTDOWN_SECOND_OF_HOUR = 5 * 60 + 20;
+// Horario de operacion: 8:00 AM a 10:00 PM (hora Bolivia UTC-4).
+// Pre-wake a las 7:59:30 para encender la CAM antes del primer ciclo.
+// Apagado a las 22:05:20 despues del ultimo ciclo del dia.
+constexpr int OPERATING_WINDOW_START = 7 * 3600 + 59 * 60 + 30;  // 7:59:30
+constexpr int OPERATING_WINDOW_END = 22 * 3600 + 5 * 60 + 20;    // 22:05:20
 constexpr unsigned long WIFI_RETRY_MS = 15000;
 constexpr time_t MIN_VALID_EPOCH = 1704067200;  // 2024-01-01 UTC
 
@@ -78,9 +81,9 @@ bool getCurrentTime(struct tm &timeInfo) {
 }
 
 bool shouldRelayBeEnabled(const struct tm &timeInfo) {
-  const int secondOfHour = timeInfo.tm_min * 60 + timeInfo.tm_sec;
-  return secondOfHour >= PREWAKE_SECOND_OF_HOUR ||
-         secondOfHour < SHUTDOWN_SECOND_OF_HOUR;
+  const int secondOfDay = timeInfo.tm_hour * 3600 + timeInfo.tm_min * 60 + timeInfo.tm_sec;
+  return secondOfDay >= OPERATING_WINDOW_START &&
+         secondOfDay < OPERATING_WINDOW_END;
 }
 
 void applyOperatingMode() {
@@ -139,7 +142,7 @@ void handleStatus() {
   json += "\"wifi_rssi\":" + String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0) + ",";
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"uptime_ms\":" + String(millis()) + ",";
-  json += "\"schedule\":{\"on\":\"hh:59:30\",\"off\":\"hh:05:20\"}";
+  json += "\"schedule\":{\"operating_hours\":\"08:00-22:00\",\"on\":\"07:59:30\",\"off\":\"22:05:20\"}";
   json += "}";
   sendJson(200, json);
 }

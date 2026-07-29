@@ -31,8 +31,9 @@ No modifica estado y puede consultarse directamente para diagnostico local.
   "ip": "192.168.0.10",
   "uptime_ms": 120000,
   "schedule": {
-    "on": "hh:59:30",
-    "off": "hh:05:20"
+    "operating_hours": "08:00-22:00",
+    "on": "07:59:30",
+    "off": "22:05:20"
   }
 }
 ```

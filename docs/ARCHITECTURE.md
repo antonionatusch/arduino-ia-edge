@@ -39,8 +39,17 @@ No coordina inferencias ni calcula mayorias.
 - En una fase posterior, ejecutar el modelo Edge Impulse.
 - Reportar predicciones; no decidir el resultado de una ronda completa.
 
-La CAM no esta disponible durante la mayor parte de cada hora porque el
-maestro corta su alimentacion deliberadamente.
+## Horario de operacion
+
+El maestro controla el rele segun la hora del reloj interno:
+
+- **Encendido:** 7:59:30 AM (pre-wake antes del primer ciclo de 8:00 AM)
+- **Apagado:** 22:05:20 PM (despues del ultimo ciclo de 10:00 PM)
+- **Fuera de horario:** el rele permanece apagado permanentemente
+
+La CAM solo recibe energia durante ese intervalo. La mayoria de las horas del
+dia la CAM esta apagada y cualquier consulta desde FastAPI o Flutter devolvera
+timeout, lo cual es un estado esperado.
 
 ### FastAPI
 
@@ -61,14 +70,14 @@ dependera del backend porque requiere historial, reintentos y reglas de voto.
 
 ## Flujo automatico futuro
 
-1. A `hh:59:30`, el maestro activa el rele.
+1. A las 7:59:30, el maestro activa el rele (pre-wake para el ciclo de 8:00 AM).
 2. La CAM arranca, se conecta a Wi-Fi e inicializa sensor y modelo.
 3. FastAPI sondea el estado de la CAM hasta que este lista o venza el timeout.
 4. FastAPI solicita una clasificacion en cada instante de la ronda.
 5. FastAPI conserva cada resultado individual.
 6. Tras la quinta muestra calcula el voto mayoritario.
 7. FastAPI persiste la ronda y envia la notificacion.
-8. A `hh:05:20`, el maestro desactiva el rele independientemente del backend.
+8. A las 22:05:20, el maestro desactiva el rele (fin del horario de operacion).
 
 ## Decisiones de seguridad
 

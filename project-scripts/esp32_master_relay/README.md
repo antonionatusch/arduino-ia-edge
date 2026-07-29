@@ -7,7 +7,10 @@ la alimentacion de la ESP32-CAM y del ventilador.
 
 - Arranca con el rele apagado.
 - En modo `automatic` mantiene el rele apagado hasta tener hora NTP valida.
-- Enciende cada hora desde `hh:59:30` hasta `hh:05:20`.
+- Horario de operacion: 8:00 AM a 10:00 PM (hora Bolivia).
+- Enciende a las 7:59:30 para precalentar antes del primer ciclo.
+- Ejecuta 5 clasificaciones por hora dentro del horario.
+- Apaga a las 22:05:20 despues del ultimo ciclo del dia.
 - Los modos `manual_on` y `manual_off` permiten diagnosticar el conjunto.
 - Si pierde Wi-Fi, el horario automatico sigue usando el reloj ya sincronizado.
 - Si reinicia sin poder obtener una hora valida, permanece apagado.

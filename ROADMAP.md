@@ -13,9 +13,14 @@ El sistema esta dividido en cuatro componentes:
 - Ubuntu Server: API, coordinacion, persistencia y notificaciones.
 - Flutter: visualizacion y control del usuario.
 
-## Ciclo acordado
+## Horario de operacion
 
-El ciclo se repite cada hora en hora de Bolivia (`UTC-4`):
+El sistema funciona de **8:00 AM a 10:00 PM** en hora de Bolivia (`UTC-4`).
+El ESP32 maestro enciende el rele a las **7:59:30** para precalentar la CAM
+antes del primer ciclo y lo apaga a las **22:05:20** despues del ultimo ciclo
+del dia. Fuera de ese rango el rele permanece apagado permanentemente.
+
+Cada hora dentro del horario de operacion se ejecuta un ciclo:
 
 | Instante | Accion |
 |---|---|
@@ -38,7 +43,7 @@ Estado: implementacion inicial disponible.
 - [x] Firmware separado para el ESP32 maestro.
 - [x] Arranque seguro con rele apagado.
 - [x] Sincronizacion NTP en hora boliviana.
-- [x] Ciclo autonomo `hh:59:30` a `hh:05:20`.
+- [x] Ciclo autonomo de 8:00 AM a 10:00 PM (pre-wake `07:59:30`, apagado `22:05:20`).
 - [x] Modos `automatic`, `manual_on` y `manual_off`.
 - [x] API HTTP del maestro protegida por token.
 - [x] Reconexion Wi-Fi sin detener el control principal.
