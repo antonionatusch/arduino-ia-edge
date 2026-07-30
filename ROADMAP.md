@@ -15,10 +15,10 @@ El sistema esta dividido en cuatro componentes:
 
 ## Horario de operacion
 
-El sistema funciona de **8:00 AM a 10:00 PM** en hora de Bolivia (`UTC-4`).
-El ESP32 maestro enciende el rele a las **7:59:30** para precalentar la CAM
-antes del primer ciclo y lo apaga a las **22:05:20** despues del ultimo ciclo
-del dia. Fuera de ese rango el rele permanece apagado permanentemente.
+El sistema ejecuta rondas horarias desde las **8:00 AM hasta las 10:00 PM** en
+hora de Bolivia (`UTC-4`). El ESP32 maestro enciende el rele treinta segundos
+antes de cada ronda y lo apaga despues de la quinta clasificacion. Entre rondas
+el rele permanece apagado.
 
 Cada hora dentro del horario de operacion se ejecuta un ciclo:
 
@@ -43,7 +43,7 @@ Estado: implementacion inicial disponible.
 - [x] Firmware separado para el ESP32 maestro.
 - [x] Arranque seguro con rele apagado.
 - [x] Sincronizacion NTP en hora boliviana.
-- [x] Ciclo autonomo de 8:00 AM a 10:00 PM (pre-wake `07:59:30`, apagado `22:05:20`).
+- [x] Ciclo horario autonomo `hh:59:30` a `hh:05:20`, para rondas de 8:00 AM a 10:00 PM.
 - [x] Modos `automatic`, `manual_on` y `manual_off`.
 - [x] API HTTP del maestro protegida por token.
 - [x] Reconexion Wi-Fi sin detener el control principal.

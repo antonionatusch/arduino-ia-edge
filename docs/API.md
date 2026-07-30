@@ -29,12 +29,13 @@ No modifica estado y puede consultarse directamente para diagnostico local.
   "wifi_connected": true,
   "wifi_rssi": -55,
   "ip": "192.168.0.10",
-  "uptime_ms": 120000,
-  "schedule": {
-    "operating_hours": "08:00-22:00",
-    "on": "07:59:30",
-    "off": "22:05:20"
-  }
+    "uptime_ms": 120000,
+    "reset_reason": "power_on",
+    "schedule": {
+      "round_hours": "08:00-22:00",
+      "on": "hh:59:30",
+      "off": "hh:05:20"
+    }
 }
 ```
 

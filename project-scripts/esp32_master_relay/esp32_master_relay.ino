@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <WebServer.h>
 #include <WiFi.h>
+#include <esp_system.h>
 #include <time.h>
 
 #if __has_include("WiFiCredentials.h")
@@ -13,6 +14,8 @@
 
 constexpr int RELAY_PIN = 26;
 constexpr bool RELAY_ACTIVE_LOW = false;
+constexpr int RELAY_ENABLED_LEVEL = RELAY_ACTIVE_LOW ? LOW : HIGH;
+constexpr int RELAY_DISABLED_LEVEL = RELAY_ACTIVE_LOW ? HIGH : LOW;
 
 constexpr char WIFI_SSID[] = SSID;
 constexpr char WIFI_PASSWORD[] = PASSWORD;
@@ -24,11 +27,12 @@ constexpr int DAYLIGHT_OFFSET_SECONDS = 0;
 constexpr char NTP_SERVER_1[] = "pool.ntp.org";
 constexpr char NTP_SERVER_2[] = "time.nist.gov";
 
-// Horario de operacion: 8:00 AM a 10:00 PM (hora Bolivia UTC-4).
-// Pre-wake a las 7:59:30 para encender la CAM antes del primer ciclo.
-// Apagado a las 22:05:20 despues del ultimo ciclo del dia.
-constexpr int OPERATING_WINDOW_START = 7 * 3600 + 59 * 60 + 30;  // 7:59:30
-constexpr int OPERATING_WINDOW_END = 22 * 3600 + 5 * 60 + 20;    // 22:05:20
+// Cada ronda enciende a hh:59:30 y apaga a hh:05:20. Las rondas validas
+// comienzan cada hora entre las 08:00 y las 22:00, hora Bolivia (UTC-4).
+constexpr int FIRST_ROUND_HOUR = 8;
+constexpr int LAST_ROUND_HOUR = 22;
+constexpr int PREWAKE_SECOND_OF_HOUR = 59 * 60 + 30;
+constexpr int SHUTDOWN_SECOND_OF_HOUR = 5 * 60 + 20;
 constexpr unsigned long WIFI_RETRY_MS = 15000;
 constexpr time_t MIN_VALID_EPOCH = 1704067200;  // 2024-01-01 UTC
 
@@ -43,6 +47,35 @@ OperatingMode operatingMode = OperatingMode::AUTOMATIC;
 bool relayEnabled = false;
 bool timeConfigured = false;
 unsigned long lastWifiAttempt = 0;
+esp_reset_reason_t lastResetReason = ESP_RST_UNKNOWN;
+
+const char *resetReasonName(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON:
+      return "power_on";
+    case ESP_RST_EXT:
+      return "external";
+    case ESP_RST_SW:
+      return "software";
+    case ESP_RST_PANIC:
+      return "panic";
+    case ESP_RST_INT_WDT:
+      return "interrupt_watchdog";
+    case ESP_RST_TASK_WDT:
+      return "task_watchdog";
+    case ESP_RST_WDT:
+      return "watchdog";
+    case ESP_RST_DEEPSLEEP:
+      return "deep_sleep";
+    case ESP_RST_BROWNOUT:
+      return "brownout";
+    case ESP_RST_SDIO:
+      return "sdio";
+    case ESP_RST_UNKNOWN:
+    default:
+      return "unknown";
+  }
+}
 
 const char *modeName(OperatingMode mode) {
   switch (mode) {
@@ -62,10 +95,7 @@ void setRelay(bool enabled) {
   }
 
   relayEnabled = enabled;
-  const int level = RELAY_ACTIVE_LOW
-      ? (enabled ? LOW : HIGH)
-      : (enabled ? HIGH : LOW);
-  digitalWrite(RELAY_PIN, level);
+  digitalWrite(RELAY_PIN, enabled ? RELAY_ENABLED_LEVEL : RELAY_DISABLED_LEVEL);
 
   Serial.printf("ESP32-CAM y ventilador: %s\n",
                 enabled ? "ENCENDIDOS" : "APAGADOS");
@@ -81,9 +111,19 @@ bool getCurrentTime(struct tm &timeInfo) {
 }
 
 bool shouldRelayBeEnabled(const struct tm &timeInfo) {
-  const int secondOfDay = timeInfo.tm_hour * 3600 + timeInfo.tm_min * 60 + timeInfo.tm_sec;
-  return secondOfDay >= OPERATING_WINDOW_START &&
-         secondOfDay < OPERATING_WINDOW_END;
+  const int secondOfHour = timeInfo.tm_min * 60 + timeInfo.tm_sec;
+
+  const bool activeRound =
+      timeInfo.tm_hour >= FIRST_ROUND_HOUR &&
+      timeInfo.tm_hour <= LAST_ROUND_HOUR &&
+      secondOfHour < SHUTDOWN_SECOND_OF_HOUR;
+
+  const bool prewakeForNextRound =
+      timeInfo.tm_hour >= FIRST_ROUND_HOUR - 1 &&
+      timeInfo.tm_hour < LAST_ROUND_HOUR &&
+      secondOfHour >= PREWAKE_SECOND_OF_HOUR;
+
+  return activeRound || prewakeForNextRound;
 }
 
 void applyOperatingMode() {
@@ -131,7 +171,7 @@ void handleStatus() {
   }
 
   String json;
-  json.reserve(320);
+  json.reserve(384);
   json += "{";
   json += "\"device\":\"esp32-master\",";
   json += "\"mode\":\"" + String(modeName(operatingMode)) + "\",";
@@ -142,7 +182,8 @@ void handleStatus() {
   json += "\"wifi_rssi\":" + String(WiFi.status() == WL_CONNECTED ? WiFi.RSSI() : 0) + ",";
   json += "\"ip\":\"" + WiFi.localIP().toString() + "\",";
   json += "\"uptime_ms\":" + String(millis()) + ",";
-  json += "\"schedule\":{\"operating_hours\":\"08:00-22:00\",\"on\":\"07:59:30\",\"off\":\"22:05:20\"}";
+  json += "\"reset_reason\":\"" + String(resetReasonName(lastResetReason)) + "\",";
+  json += "\"schedule\":{\"round_hours\":\"08:00-22:00\",\"on\":\"hh:59:30\",\"off\":\"hh:05:20\"}";
   json += "}";
   sendJson(200, json);
 }
@@ -238,11 +279,15 @@ void maintainWifiAndTime() {
 
 void setup() {
   Serial.begin(115200);
-  pinMode(RELAY_PIN, OUTPUT);
+  lastResetReason = esp_reset_reason();
 
-  // El arranque siempre es seguro, aun si el modo automatico tarda en obtener NTP.
-  relayEnabled = true;
-  setRelay(false);
+  // Set the output latch before enabling the pin to avoid a relay pulse.
+  digitalWrite(RELAY_PIN, RELAY_DISABLED_LEVEL);
+  pinMode(RELAY_PIN, OUTPUT);
+  relayEnabled = false;
+
+  Serial.printf("Motivo del ultimo reinicio: %s\n",
+                resetReasonName(lastResetReason));
 
   WiFi.mode(WIFI_STA);
   WiFi.setHostname(HOSTNAME);
