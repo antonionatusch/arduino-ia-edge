@@ -115,6 +115,39 @@ Retransmite el endpoint `/status` del sketch
 
 Retransmite la captura BMP actual. Usa `Cache-Control: no-store`.
 
+### `POST /api/v1/camera/classify`
+
+Clasifica el ultimo frame almacenado por `/capture`. Puede devolver una clase
+del modelo (`empty`, `food_available`, `unknown`) o `not_classified` cuando
+ninguna clase alcanza el umbral minimo.
+
+### `POST /api/v1/camera/capture-classify`
+
+Solicita una captura nueva y a continuacion clasifica exactamente ese frame.
+El backend comprueba que los identificadores de frame coincidan.
+
+### `WS /api/v1/camera/debug-stream`
+
+Requiere `X-API-Key` durante el handshake y que el maestro este en modo
+`manual_on` con el rele activo. Retransmite frames RGB565 binarios y mensajes
+JSON de clasificacion. FastAPI ejecuta una captura antes de cada inferencia;
+por tanto, el `frame_id` del JSON identifica la imagen evaluada.
+
+```json
+{
+  "type": "classification",
+  "data": {
+    "status": "classified",
+    "predicted_class": "food_available",
+    "confidence": 0.98,
+    "frame_id": 12
+  }
+}
+```
+
+El stream interactivo se rechaza en modo `automatic` para no introducir
+inferencias adicionales en las rondas de produccion.
+
 ## Errores del backend
 
 - HTTP 401: token ausente o incorrecto.
